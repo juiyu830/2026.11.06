@@ -65,7 +65,7 @@
 </div>
 <div class="modal-backdrop" id="modalBackdrop" hidden><div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><div class="modal-head"><h2 id="modalTitle">新增待辦</h2><button class="close" id="closeModal" aria-label="關閉">×</button></div><form id="itemForm"><div class="field"><label for="itemTitle">事項名稱</label><input id="itemTitle" required maxlength="100" placeholder="例如：寄出文件"></div><div class="field-grid"><div class="field"><label for="itemDate">日期（可留空，無日期待辦每天顯示）</label><input id="itemDate" type="date"></div><div class="field"><label for="itemTime">截止／開始時間（選填）</label><input id="itemTime" type="time"></div></div><div class="field" id="tagField"><label for="itemTag">標籤（選填）</label><input id="itemTag" maxlength="24" placeholder="例如：工作、生活"></div><div class="switch-row" id="reminderRow"><span>前一天提醒</span><input id="itemReminder" class="switch" type="checkbox" checked aria-label="前一天提醒"></div><div class="switch-row" id="allDayRow" hidden><span>整天活動</span><input id="itemAllDay" class="switch" type="checkbox" aria-label="整天活動"></div><div class="modal-actions"><button type="button" class="btn secondary" id="cancelModal">取消</button><button type="submit" class="btn primary">儲存</button></div></form></div></div>
 <div class="toast" id="toast" role="status"></div>
-<!-- Firebase Authentication only initializes on a hosted origin (HTTPS/localhost). -->
+<!-- Public Firebase Web App configuration. Security is enforced by Authentication and backend rules, not by hiding these values. -->
 <!-- Fill in the Firebase Web App config; Firebase cannot initialize until these values are set. -->
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
@@ -73,10 +73,10 @@ import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signI
 
 // 請在 Firebase Console 建立 Web App，並將其設定填入下方。
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyDyxrMlao6rln174WsZNXEXiwH5Yoif2Q",
+  authDomain: "daylight-planner-1103.firebaseapp.com",
+  projectId: "daylight-planner-1103",
+  appId: "1:470887891671:web:b6603965e7c0d1f99ae692"
 };
 const authGate = document.querySelector('#authGate');
 const plannerApp = document.querySelector('#plannerApp');
