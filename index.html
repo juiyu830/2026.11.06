@@ -76,12 +76,13 @@
 <div class="modal-backdrop" id="modalBackdrop" hidden><div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><div class="modal-head"><h2 id="modalTitle">新增待辦</h2><button class="close" id="closeModal" aria-label="關閉">×</button></div><form id="itemForm"><div class="field"><label for="itemTitle">事項名稱</label><input id="itemTitle" required maxlength="100" placeholder="例如：寄出文件"></div><div class="field-grid"><div class="field"><label for="itemDate">日期（可留空，無日期待辦每天顯示）</label><input id="itemDate" type="date"></div><div class="field"><label for="itemTime">截止／開始時間（選填）</label><input id="itemTime" type="time"></div></div><div class="field" id="tagField"><label for="itemTag">標籤（選填）</label><input id="itemTag" maxlength="24" placeholder="例如：工作、生活"></div><div class="switch-row" id="reminderRow"><span>前一天提醒</span><input id="itemReminder" class="switch" type="checkbox" checked aria-label="前一天提醒"></div><div class="switch-row" id="allDayRow" hidden><span>整天活動</span><input id="itemAllDay" class="switch" type="checkbox" aria-label="整天活動"></div><div class="modal-actions"><button type="button" class="btn secondary" id="cancelModal">取消</button><button type="submit" class="btn primary">儲存</button></div></form></div></div>
 <div class="toast" id="toast" role="status"></div>
 <!-- Public Firebase Web App configuration. Security is enforced by Authentication and backend rules, not by hiding these values. -->
-<!-- Fill in the Firebase Web App config; Firebase cannot initialize until these values are set. -->
 <script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
-import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signInWithRedirect, getRedirectResult, signOut } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
+import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signInWithRedirect, getRedirectResult, signOut } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-auth.js";
+import { getFirestore, doc, setDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
+import { execute } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore-pipelines.js";
 
-// 請在 Firebase Console 建立 Web App，並將其設定填入下方。
+// Firebase Web App 設定。Firestore 的權限由登入狀態與 Security Rules 控制。
 const firebaseConfig = {
   apiKey: "AIzaSyDyxrMlao6rln1Z4Ws7NXEXiwH5YvOif2Q",
   authDomain: "daylight-planner-1103.firebaseapp.com",
@@ -105,6 +106,9 @@ let firebaseSessionActive = false;
 let redirectResultUser = null;
 let firebaseAuthReady = false;
 let redirectResultReady = false;
+let loadedGoogleUid = '';
+let googleLoadPromise = null;
+let googleLoadingUid = '';
 const firebaseConfigured = ['apiKey', 'authDomain', 'projectId', 'appId'].every(key => { const value = firebaseConfig[key]; return typeof value === 'string' && value && !value.startsWith('YOUR_'); });
 
 function showPlanner(displayName, accountText = '', accountTitle = '') {
@@ -151,15 +155,83 @@ if (!firebaseConfigured) {
 } else {
   const firebaseApp = initializeApp(firebaseConfig);
   const auth = getAuth(firebaseApp);
+  const db = getFirestore(firebaseApp, 'planner-data');
   const googleProvider = new GoogleAuthProvider();
   lineSignInButton.disabled = !liffConfigured;
 
+  let cloudSyncedItems = new Map();
+  let cloudDesiredItems = new Map();
+  let cloudWriteQueue = Promise.resolve();
+  async function loadGoogleItems(uid) {
+    const result = await execute(db.pipeline().collection(`users/${uid}/items`));
+    return result.results.map(document => document.data());
+  }
+  function persistGoogleItems(uid, items) {
+    cloudDesiredItems = new Map(items.map(item => [String(item.id), { ...item, uid }]));
+    cloudWriteQueue = cloudWriteQueue.catch(() => {}).then(async () => {
+      const target = new Map(cloudDesiredItems);
+      const writes = [];
+      for (const [id, item] of target) {
+        if (JSON.stringify(cloudSyncedItems.get(id)) !== JSON.stringify(item)) {
+          writes.push(setDoc(doc(db, 'users', uid, 'items', id), item));
+        }
+      }
+      for (const id of cloudSyncedItems.keys()) {
+        if (!target.has(id)) writes.push(deleteDoc(doc(db, 'users', uid, 'items', id)));
+      }
+      await Promise.all(writes);
+      cloudSyncedItems = target;
+    }).catch(error => {
+      console.error('Firestore save failed:', error);
+      window.showPlannerToast?.('雲端儲存失敗，請檢查網路後重新整理再試');
+    });
+    return cloudWriteQueue;
+  }
+  async function activateGooglePlanner(user) {
+    if (loadedGoogleUid === user.uid) {
+      showPlanner(user.displayName || user.email || '我的日常', user.displayName || user.email || '', user.email || '');
+      return;
+    }
+    if (googleLoadPromise && googleLoadingUid === user.uid) return googleLoadPromise;
+    googleLoadingUid = user.uid;
+    googleLoadPromise = (async () => {
+      loadingGate.hidden = false;
+      authGate.hidden = true;
+      plannerApp.hidden = true;
+      window.setPlannerStorageMode?.('loading');
+      try {
+        const items = await loadGoogleItems(user.uid);
+        if (auth.currentUser?.uid !== user.uid) return;
+        cloudSyncedItems = new Map(items.map(item => [String(item.id), { ...item }]));
+        cloudDesiredItems = new Map(cloudSyncedItems);
+        window.activateCloudPlanner?.(items, updatedItems => persistGoogleItems(user.uid, updatedItems));
+        loadedGoogleUid = user.uid;
+        showPlanner(user.displayName || user.email || '我的日常', user.displayName || user.email || '', user.email || '');
+        if (!items.length) window.showPlannerToast?.('Google 雲端目前沒有資料；此裝置的 LINE／本機資料仍保留在本機');
+      } catch (error) {
+        if (auth.currentUser?.uid !== user.uid) return;
+        console.error('Firestore load failed:', error);
+        loadedGoogleUid = '';
+        loadingGate.hidden = true;
+        plannerApp.hidden = true;
+        authGate.hidden = false;
+        authStatus.classList.add('error');
+        authStatus.textContent = '無法載入 Google 雲端資料。請確認 Firestore 設定與網路後重新整理。';
+      }
+    })().finally(() => {
+      if (googleLoadingUid === user.uid) {
+        googleLoadPromise = null;
+        googleLoadingUid = '';
+      }
+    });
+    return googleLoadPromise;
+  }
+
   getRedirectResult(auth).then(result => {
     if (result?.user) {
-      const user = result.user;
-      redirectResultUser = user;
+      redirectResultUser = result.user;
       firebaseSessionActive = true;
-      showPlanner(user.displayName || user.email || '我的日常', user.displayName || user.email || '', user.email || '');
+      return activateGooglePlanner(result.user);
     }
   }).catch(error => { showAuthError(error); }).finally(() => {
     redirectResultReady = true;
@@ -183,6 +255,7 @@ if (!firebaseConfigured) {
       if (liff.isLoggedIn()) {
         const profile = await liff.getProfile();
         lineSessionActive = true;
+        window.activateLocalPlanner?.();
         googleSignInButton.hidden = true;
         lineSignInButton.hidden = true;
         document.querySelector('.auth-note').hidden = true;
@@ -199,12 +272,14 @@ if (!firebaseConfigured) {
     if (user) {
       redirectResultUser = null;
       firebaseSessionActive = true;
-      showPlanner(user.displayName || user.email || '我的日常', user.displayName || user.email || '', user.email || '');
+      activateGooglePlanner(user);
     } else if (redirectResultUser) {
       firebaseSessionActive = true;
-      showPlanner(redirectResultUser.displayName || redirectResultUser.email || '我的日常', redirectResultUser.displayName || redirectResultUser.email || '', redirectResultUser.email || '');
+      activateGooglePlanner(redirectResultUser);
     } else {
       firebaseSessionActive = false;
+      loadedGoogleUid = '';
+      window.setPlannerStorageMode?.('loading');
       showAuthGateWhenReady();
     }
   }, error => {
@@ -236,6 +311,7 @@ if (!firebaseConfigured) {
       }
       const profile = await liff.getProfile();
       lineSessionActive = true;
+      window.activateLocalPlanner?.();
       googleSignInButton.hidden = true;
       lineSignInButton.hidden = true;
       document.querySelector('.auth-note').hidden = true;
@@ -269,7 +345,7 @@ if (!firebaseConfigured) {
 
   signOutButton.addEventListener('click', async () => {
     signOutButton.disabled = true;
-    try { if (lineSessionActive && liffConfigured) { await initializeLiff(); if (liff.isLoggedIn()) liff.logout(); lineSessionActive = false; loadingGate.hidden = true; authGate.hidden = false; plannerApp.hidden = true; signedInUser.textContent = ''; googleSignInButton.hidden = false; lineSignInButton.hidden = false; document.querySelector('.auth-note').hidden = false; return; } await signOut(auth); }
+    try { if (lineSessionActive && liffConfigured) { await initializeLiff(); if (liff.isLoggedIn()) liff.logout(); lineSessionActive = false; window.setPlannerStorageMode?.('loading'); loadingGate.hidden = true; authGate.hidden = false; plannerApp.hidden = true; signedInUser.textContent = ''; googleSignInButton.hidden = false; lineSignInButton.hidden = false; document.querySelector('.auth-note').hidden = false; return; } await cloudWriteQueue; await signOut(auth); }
     catch (error) { console.error('Firebase sign-out error:', error); toast('登出失敗，請再試一次'); }
     finally { signOutButton.disabled = false; }
   });
@@ -288,8 +364,9 @@ if (!firebaseConfigured) {
     {id:7,type:'event',title:'繳交專案企劃',date:dateISO(shift(now,2)),time:'',allDay:true,done:false},
     {id:8,type:'task',title:'寄出合約確認信',date:dateISO(shift(now,-2)),time:'',tag:'工作',reminder:false,done:true,created:dateISO(shift(now,-3)),carry:0}
   ];
-  let data;try{data=JSON.parse(localStorage.getItem('daylight-items-v1'))||seed}catch{data=seed}let page='today',filter='all',view='tasks',selected=todayISO,month=new Date(now.getFullYear(),now.getMonth(),1),toastTimer;
-  function persist(){localStorage.setItem('daylight-items-v1',JSON.stringify(data))}function esc(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+  function readLocalData(){try{return JSON.parse(localStorage.getItem('daylight-items-v1'))||seed}catch{return seed}}
+  let data=readLocalData(),storageMode='local',cloudPersist=null,page='today',filter='all',view='tasks',selected=todayISO,month=new Date(now.getFullYear(),now.getMonth(),1),toastTimer;
+  function persist(){if(storageMode==='loading')return;if(storageMode==='cloud'){cloudPersist?.(data);return}localStorage.setItem('daylight-items-v1',JSON.stringify(data))}function esc(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
   function normalize(){data.forEach(x=>{if(x.type==='task'&&!x.done&&x.date&&x.date<todayISO){const n=Math.max(1,Math.floor((now-new Date(x.date+'T12:00:00'))/86400000));x.date=todayISO;x.carry=(x.carry||0)+n}});persist()}
   function toast(s){const t=$('#toast');t.textContent=s;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),2600)}
   function itemCard(x){const event=x.type==='event';let meta=event?(x.allDay?'整天活動':`${x.time||'未設定時間'} · 活動`):(x.time?`${x.time} · 截止`:(x.date?'截止 '+fmt(x.date,{month:'short',day:'numeric'}):'每日待辦'));if(x.date&&!event&&x.time)meta=`${fmt(x.date,{month:'short',day:'numeric'})} · ${x.time} 截止`;const cls=['task',x.done?'done':''].join(' ');const due=x.date===todayISO&&!event?'due':x.date<todayISO&&!event&&!x.done?'overdue':'';return `<article class="${cls}" data-id="${x.id}"><button class="check" aria-label="${x.done?'取消完成':'標記完成'}" data-action="toggle" data-id="${x.id}"></button><div class="task-body"><div class="task-title">${esc(x.title)}</div><div class="task-meta"><span class="${due}">${esc(meta)}</span>${x.carry?`<span class="carry">順延 ${x.carry} 天</span>`:''}</div></div><div class="task-tools">${x.tag?`<span class="tag">${esc(x.tag)}</span>`:''}<button class="more" aria-label="更多操作" data-action="edit" data-id="${x.id}">···</button></div></article>`}
@@ -306,6 +383,10 @@ if (!firebaseConfigured) {
   $$('.nav-btn').forEach(b=>b.addEventListener('click',()=>setPage(b.dataset.page)));
   document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('#modalBackdrop').hidden)closeModal()});$$('.filter').forEach(b=>b.onclick=()=>{$$('.filter').forEach(x=>x.classList.remove('active'));b.classList.add('active');filter=b.dataset.filter;renderTasks()});$$('#viewSwitch button').forEach(b=>b.onclick=()=>{if(b.dataset.view==='calendar')setPage('calendar');else setPage('today')});function moveMonth(n){month=new Date(month.getFullYear(),month.getMonth()+n,1);renderCalendar()}$('#prevMonth').onclick=()=>moveMonth(-1);$('#nextMonth').onclick=()=>moveMonth(1);$('#prevBig').onclick=()=>moveMonth(-1);$('#nextBig').onclick=()=>moveMonth(1);
   $('#notifyBtn').onclick=async()=>{if(!('Notification'in window)){toast('此瀏覽器不支援系統通知');return}try{const p=await Notification.requestPermission();if(p==='granted'){new Notification('日常提醒已開啟',{body:'前一天提醒會顯示在提醒事項中。'});toast('系統通知已啟用')}else toast('尚未允許通知；App 內提醒仍可使用')}catch{toast('請在安全連線（HTTPS）或 localhost 啟用通知')}};
+  window.showPlannerToast=toast;
+  window.setPlannerStorageMode=mode=>{storageMode=mode;if(mode!=='cloud')cloudPersist=null};
+  window.activateLocalPlanner=()=>{storageMode='local';cloudPersist=null;data=readLocalData();normalize();setPage('today')};
+  window.activateCloudPlanner=(items,persistCloud)=>{storageMode='cloud';cloudPersist=persistCloud;data=items;normalize();setPage('today')};
   const tips=['完成一件小事，也值得為自己感到開心。','別忘了留一點時間，什麼也不做。','一步一步來，你已經在前進了。','把注意力放回眼前，一件事就好。'];$('#dailyTip').textContent=tips[now.getDate()%tips.length];normalize();setPage('today');
 })();
 </script>

@@ -1,0 +1,9 @@
+{
+  "firestore": {
+    "database": "planner-data",
+    "location": "asia-east1",
+    "edition": "enterprise",
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  }
+}

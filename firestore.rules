@@ -1,0 +1,95 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny. The more specific item rule below grants access only to
+    // authenticated owners of their own user path.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    // Collection: users/{uid}/items
+    // Document ID: decimal representation of the item's positive integer id.
+    // Fields (all required):
+    //   uid: string, authenticated owner; immutable.
+    //   id: positive integer, application item identifier.
+    //   type: "task" or "event".
+    //   title: string, 1-100 characters.
+    //   date: null or YYYY-MM-DD string (10 characters).
+    //   time: empty string or 24-hour HH:mm string.
+    //   tag: string, 0-24 characters.
+    //   reminder, allDay, done: booleans.
+    //   created: YYYY-MM-DD string (10 characters), immutable.
+    //   carry: integer from 0 to 100000.
+    // Documents contain no email, LINE profile, or other cross-user data.
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isAuthenticated() && resource.data.uid == request.auth.uid;
+    }
+
+    function uidUnchanged() {
+      return request.resource.data.uid == request.auth.uid;
+    }
+
+    function uidNotModified() {
+      return request.resource.data.uid == resource.data.uid &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['uid']);
+    }
+
+    function isDateString(value) {
+      return value is string && value.size() == 10 &&
+        value.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    function isValidItem(data) {
+      return data is map &&
+        data.keys().hasAll([
+          'uid', 'id', 'type', 'title', 'date', 'time', 'tag',
+          'reminder', 'allDay', 'done', 'created', 'carry'
+        ]) &&
+        data.keys().hasOnly([
+          'uid', 'id', 'type', 'title', 'date', 'time', 'tag',
+          'reminder', 'allDay', 'done', 'created', 'carry'
+        ]) &&
+        data.uid is string && data.uid == request.auth.uid && data.uid.size() <= 128 &&
+        data.id is int && data.id > 0 && data.id <= 9999999999999 &&
+        data.type in ['task', 'event'] &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 100 &&
+        (data.date == null || isDateString(data.date)) &&
+        data.time is string && data.time.size() <= 5 &&
+        (data.time == '' || data.time.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$')) &&
+        data.tag is string && data.tag.size() <= 24 &&
+        data.reminder is bool && data.allDay is bool && data.done is bool &&
+        isDateString(data.created) &&
+        data.carry is int && data.carry >= 0 && data.carry <= 100000 &&
+        ((data.type == 'task' && !data.allDay) ||
+          (data.type == 'event' && !data.reminder && data.tag == '')) &&
+        (!data.allDay || data.time == '');
+    }
+
+    match /users/{userId}/items/{itemId} {
+      // A collection query scoped to this user path is authorized by path alone;
+      // this keeps the pipeline query provable without filtering on item fields.
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && uidUnchanged() &&
+        isValidItem(request.resource.data);
+      allow update: if isOwner(userId) && isDocOwner() && uidNotModified() &&
+        isValidItem(request.resource.data) &&
+        request.resource.data.id == resource.data.id &&
+        request.resource.data.type == resource.data.type &&
+        request.resource.data.created == resource.data.created;
+      allow delete: if isOwner(userId) && isDocOwner();
+    }
+  }
+}
