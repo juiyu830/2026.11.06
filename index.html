@@ -145,7 +145,9 @@ function showAuthError(error) {
   authStatus.textContent = messages[error.code] || '登入失敗：' + (error.message || '請稍後再試。');
 }
 
-if (!firebaseConfigured) {
+if (location.protocol === 'file:') {
+  window.showLocalFileNotice?.();
+} else if (!firebaseConfigured) {
   loadingGate.hidden = true;
   authGate.hidden = false;
   authStatus.classList.add('error');
@@ -421,6 +423,29 @@ if (!firebaseConfigured) {
   window.activateLocalPlanner=()=>{storageMode='local';cloudPersist=null;data=readLocalData();normalize();setPage('today')};
   window.activateCloudPlanner=(items,persistCloud)=>{storageMode='cloud';cloudPersist=persistCloud;data=items;normalize();setPage('today')};
   const tips=['完成一件小事，也值得為自己感到開心。','別忘了留一點時間，什麼也不做。','一步一步來，你已經在前進了。','把注意力放回眼前，一件事就好。'];$('#dailyTip').textContent=tips[now.getDate()%tips.length];normalize();setPage('today');localPersistInitialized=true;
+})();
+</script>
+<script>
+(() => {
+  if (location.protocol !== 'file:') return;
+  const loadingGate = document.querySelector('#loadingGate');
+  const authGate = document.querySelector('#authGate');
+  const status = document.querySelector('#authStatus');
+  loadingGate.hidden = true;
+  authGate.hidden = false;
+  document.querySelector('#plannerApp').hidden = true;
+  document.querySelector('#googleSignIn').hidden = true;
+  document.querySelector('#lineSignIn').hidden = true;
+  document.querySelector('.auth-note').hidden = true;
+  document.querySelector('#authGate h1').textContent = '請開啟線上版本登入';
+  document.querySelector('#authGate .auth-copy').textContent = '目前是直接開啟桌面檔案（file://）。瀏覽器會阻擋這種方式載入 Firebase 登入和 Firestore。';
+  status.classList.add('error');
+  status.replaceChildren(document.createTextNode('請改用：'));
+  const link = document.createElement('a');
+  link.href = 'https://juiyu830.github.io/2026.11.06/';
+  link.textContent = '日常 Planner 線上版';
+  status.append(' ', link);
+  window.showLocalFileNotice = () => {};
 })();
 </script>
 </body>
