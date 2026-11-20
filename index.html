@@ -80,7 +80,6 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signInWithRedirect, getRedirectResult, signOut } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
-import liff from "https://esm.sh/@line/liff@2.31.1";
 
 // 請在 Firebase Console 建立 Web App，並將其設定填入下方。
 const firebaseConfig = {
@@ -106,7 +105,6 @@ let firebaseSessionActive = false;
 let redirectResultUser = null;
 let firebaseAuthReady = false;
 let redirectResultReady = false;
-let liffAuthReady = !liffConfigured;
 const firebaseConfigured = ['apiKey', 'authDomain', 'projectId', 'appId'].every(key => { const value = firebaseConfig[key]; return typeof value === 'string' && value && !value.startsWith('YOUR_'); });
 
 function showPlanner(displayName, accountText = '', accountTitle = '') {
@@ -122,7 +120,7 @@ function showPlanner(displayName, accountText = '', accountTitle = '') {
 }
 
 function showAuthGateWhenReady() {
-  if (!firebaseAuthReady || !redirectResultReady || !liffAuthReady || firebaseSessionActive || lineSessionActive) return;
+  if (!firebaseAuthReady || !redirectResultReady || firebaseSessionActive || lineSessionActive) return;
   loadingGate.hidden = true;
   plannerApp.hidden = true;
   authGate.hidden = false;
@@ -168,10 +166,16 @@ if (!firebaseConfigured) {
     showAuthGateWhenReady();
   });
 
+  let liff;
   let liffInitPromise;
   async function initializeLiff() {
     if (!liffConfigured) throw new Error('尚未設定 LIFF ID。請在 firebaseConfig.liffId 填入 LIFF app ID。');
-    if (!liffInitPromise) liffInitPromise = liff.init({ liffId: firebaseConfig.liffId });
+    if (!liffInitPromise) {
+      liffInitPromise = import('https://esm.sh/@line/liff@2.31.1').then(async module => {
+        liff = module.default || module.liff || module;
+        await liff.init({ liffId: firebaseConfig.liffId });
+      });
+    }
     await liffInitPromise;
   }
   if (liffConfigured) {
@@ -188,9 +192,6 @@ if (!firebaseConfigured) {
       console.error('LIFF initialization failed:', error);
       authStatus.classList.add('error');
       authStatus.textContent = 'LINE 初始化失敗：' + (error.message || '請確認 LIFF Endpoint URL、LIFF ID 與授權設定。');
-    }).finally(() => {
-      liffAuthReady = true;
-      showAuthGateWhenReady();
     });
   }
   onAuthStateChanged(auth, user => {
