@@ -80,7 +80,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signInWithRedirect, getRedirectResult, signOut } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-auth.js";
 import { getFirestore, doc, setDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
-import { execute } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore-pipelines.js";
+import { pipelines } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore-pipelines.js";
 
 // Firebase Web App 設定。Firestore 的權限由登入狀態與 Security Rules 控制。
 const firebaseConfig = {
@@ -186,7 +186,7 @@ if (location.protocol === 'file:') {
     };
   }
   async function loadGoogleItems(uid) {
-    const result = await execute(db.pipeline().collection(`users/${uid}/items`));
+    const result = await pipelines.execute(db.pipeline().collection(`users/${uid}/items`));
     return result.results.map(document => itemForFirestore(uid, document.data()));
   }
   function persistGoogleItems(uid, items) {
