@@ -162,12 +162,36 @@ if (!firebaseConfigured) {
   let cloudSyncedItems = new Map();
   let cloudDesiredItems = new Map();
   let cloudWriteQueue = Promise.resolve();
+  function itemForFirestore(uid, item) {
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+    const type = item.type === 'event' ? 'event' : 'task';
+    const carry = Number.isInteger(item.carry) ? Math.max(0, Math.min(item.carry, 100000)) : 0;
+    return {
+      uid,
+      id: Number(item.id),
+      type,
+      title: String(item.title || '').trim().slice(0, 100),
+      date: validDate(item.date) ? item.date : null,
+      time: typeof item.time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(item.time) ? item.time : '',
+      tag: type === 'task' ? String(item.tag || '').slice(0, 24) : '',
+      reminder: type === 'task' && Boolean(item.reminder),
+      allDay: type === 'event' && Boolean(item.allDay),
+      done: Boolean(item.done),
+      created: validDate(item.created) ? item.created : (validDate(item.date) ? item.date : today),
+      carry
+    };
+  }
   async function loadGoogleItems(uid) {
     const result = await execute(db.pipeline().collection(`users/${uid}/items`));
-    return result.results.map(document => document.data());
+    return result.results.map(document => itemForFirestore(uid, document.data()));
   }
   function persistGoogleItems(uid, items) {
-    cloudDesiredItems = new Map(items.map(item => [String(item.id), { ...item, uid }]));
+    cloudDesiredItems = new Map(items.map(item => {
+      const storedItem = itemForFirestore(uid, item);
+      return [String(storedItem.id), storedItem];
+    }));
     cloudWriteQueue = cloudWriteQueue.catch(() => {}).then(async () => {
       const target = new Map(cloudDesiredItems);
       const writes = [];
@@ -200,9 +224,16 @@ if (!firebaseConfigured) {
       plannerApp.hidden = true;
       window.setPlannerStorageMode?.('loading');
       try {
-        const items = await loadGoogleItems(user.uid);
+        const storedItems = await loadGoogleItems(user.uid);
         if (auth.currentUser?.uid !== user.uid) return;
-        cloudSyncedItems = new Map(items.map(item => [String(item.id), { ...item }]));
+        let items = storedItems;
+        if (!storedItems.length) {
+          const localItems = window.getLocalPlannerItemsForMigration?.();
+          if (Array.isArray(localItems) && localItems.length && window.confirm(
+            `這個 Google 帳號目前沒有雲端資料。要把此裝置的 ${localItems.length} 筆本機資料複製到這個 Google 帳號嗎？若資料屬於 LINE 專用，請選「取消」。本機資料會保留。`
+          )) items = localItems.map(item => itemForFirestore(user.uid, item));
+        }
+        cloudSyncedItems = new Map(storedItems.map(item => [String(item.id), { ...item }]));
         cloudDesiredItems = new Map(cloudSyncedItems);
         window.activateCloudPlanner?.(items, updatedItems => persistGoogleItems(user.uid, updatedItems));
         loadedGoogleUid = user.uid;
@@ -364,9 +395,10 @@ if (!firebaseConfigured) {
     {id:7,type:'event',title:'繳交專案企劃',date:dateISO(shift(now,2)),time:'',allDay:true,done:false},
     {id:8,type:'task',title:'寄出合約確認信',date:dateISO(shift(now,-2)),time:'',tag:'工作',reminder:false,done:true,created:dateISO(shift(now,-3)),carry:0}
   ];
+  let localItemsAvailableForMigration=false,localPersistInitialized=false;try{localItemsAvailableForMigration=localStorage.getItem('daylight-items-v1')!==null}catch{}
   function readLocalData(){try{return JSON.parse(localStorage.getItem('daylight-items-v1'))||seed}catch{return seed}}
   let data=readLocalData(),storageMode='local',cloudPersist=null,page='today',filter='all',view='tasks',selected=todayISO,month=new Date(now.getFullYear(),now.getMonth(),1),toastTimer;
-  function persist(){if(storageMode==='loading')return;if(storageMode==='cloud'){cloudPersist?.(data);return}localStorage.setItem('daylight-items-v1',JSON.stringify(data))}function esc(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+  function persist(){if(storageMode==='loading')return;if(storageMode==='cloud'){cloudPersist?.(data);return}localStorage.setItem('daylight-items-v1',JSON.stringify(data));if(localPersistInitialized)localItemsAvailableForMigration=true}function esc(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
   function normalize(){data.forEach(x=>{if(x.type==='task'&&!x.done&&x.date&&x.date<todayISO){const n=Math.max(1,Math.floor((now-new Date(x.date+'T12:00:00'))/86400000));x.date=todayISO;x.carry=(x.carry||0)+n}});persist()}
   function toast(s){const t=$('#toast');t.textContent=s;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),2600)}
   function itemCard(x){const event=x.type==='event';let meta=event?(x.allDay?'整天活動':`${x.time||'未設定時間'} · 活動`):(x.time?`${x.time} · 截止`:(x.date?'截止 '+fmt(x.date,{month:'short',day:'numeric'}):'每日待辦'));if(x.date&&!event&&x.time)meta=`${fmt(x.date,{month:'short',day:'numeric'})} · ${x.time} 截止`;const cls=['task',x.done?'done':''].join(' ');const due=x.date===todayISO&&!event?'due':x.date<todayISO&&!event&&!x.done?'overdue':'';return `<article class="${cls}" data-id="${x.id}"><button class="check" aria-label="${x.done?'取消完成':'標記完成'}" data-action="toggle" data-id="${x.id}"></button><div class="task-body"><div class="task-title">${esc(x.title)}</div><div class="task-meta"><span class="${due}">${esc(meta)}</span>${x.carry?`<span class="carry">順延 ${x.carry} 天</span>`:''}</div></div><div class="task-tools">${x.tag?`<span class="tag">${esc(x.tag)}</span>`:''}<button class="more" aria-label="更多操作" data-action="edit" data-id="${x.id}">···</button></div></article>`}
@@ -385,9 +417,10 @@ if (!firebaseConfigured) {
   $('#notifyBtn').onclick=async()=>{if(!('Notification'in window)){toast('此瀏覽器不支援系統通知');return}try{const p=await Notification.requestPermission();if(p==='granted'){new Notification('日常提醒已開啟',{body:'前一天提醒會顯示在提醒事項中。'});toast('系統通知已啟用')}else toast('尚未允許通知；App 內提醒仍可使用')}catch{toast('請在安全連線（HTTPS）或 localhost 啟用通知')}};
   window.showPlannerToast=toast;
   window.setPlannerStorageMode=mode=>{storageMode=mode;if(mode!=='cloud')cloudPersist=null};
+  window.getLocalPlannerItemsForMigration=()=>{if(!localItemsAvailableForMigration)return null;try{const saved=JSON.parse(localStorage.getItem('daylight-items-v1'));return Array.isArray(saved)?saved:null}catch{return null}};
   window.activateLocalPlanner=()=>{storageMode='local';cloudPersist=null;data=readLocalData();normalize();setPage('today')};
   window.activateCloudPlanner=(items,persistCloud)=>{storageMode='cloud';cloudPersist=persistCloud;data=items;normalize();setPage('today')};
-  const tips=['完成一件小事，也值得為自己感到開心。','別忘了留一點時間，什麼也不做。','一步一步來，你已經在前進了。','把注意力放回眼前，一件事就好。'];$('#dailyTip').textContent=tips[now.getDate()%tips.length];normalize();setPage('today');
+  const tips=['完成一件小事，也值得為自己感到開心。','別忘了留一點時間，什麼也不做。','一步一步來，你已經在前進了。','把注意力放回眼前，一件事就好。'];$('#dailyTip').textContent=tips[now.getDate()%tips.length];normalize();setPage('today');localPersistInitialized=true;
 })();
 </script>
 </body>
